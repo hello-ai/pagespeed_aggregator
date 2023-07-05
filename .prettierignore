@@ -1,0 +1,4 @@
+.next
+rpc/
+dist/
+*.json
