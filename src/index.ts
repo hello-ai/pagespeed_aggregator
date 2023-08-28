@@ -1,6 +1,6 @@
 const PAGE_SPEED_INSIGHTS_API_ROOT =
   'https://www.googleapis.com/pagespeedonline/v5/runPagespeed'
-const API_KEY = 'AIzaSyCog6kpgc-wIGVWehXTIQ3dBtZsRPcOMnQ'
+const API_KEY = 'AIzaSyAxtgni5zo66IoyG8bZCgDOu7DrGFq5opQ'
 
 const INITIAL_COLUMN_NAMES = [
   '日付',
@@ -137,6 +137,20 @@ type PageSpeedModel = {
   version: Version
 }
 
+type TValue = {
+  performance: string
+  fcpScore: string
+  siScore: string
+  lcpScore: string
+  tbtScore: string
+  clsScore: string
+  fcpTime: string
+  siTime: string
+  lcpTime: string
+  tbtTime: string
+  clsValue: string
+}
+
 class SpreadSheet {
   private spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet
 
@@ -182,7 +196,22 @@ const getTargetUrls = () => {
   }))
 }
 
-const getPageSpeedResult = (url: string, lastPerformanceScore: string, isRetry = false): PageSpeedModel => {
+const getPageSpeedResults3Times = (url: string): PageSpeedModel[] => {
+  // UrlFetchAppのfetchAllを使い、3回fetchし、その平均値を取得する
+  Logger.log(`3 times fetch ${url}`)
+
+  const responses = UrlFetchApp.fetchAll([
+    `${PAGE_SPEED_INSIGHTS_API_ROOT}?url=${url}&category=performance&strategy=mobile&key=${API_KEY}`,
+    `${PAGE_SPEED_INSIGHTS_API_ROOT}?url=${url}&category=performance&strategy=mobile&key=${API_KEY}`,
+    `${PAGE_SPEED_INSIGHTS_API_ROOT}?url=${url}&category=performance&strategy=mobile&key=${API_KEY}`,
+  ])
+
+  return responses.map((v) => JSON.parse(v.getContentText()) as PageSpeedModel)
+}
+
+
+const getPageSpeedResult = (url: string): PageSpeedModel => {
+  Logger.log(`fetch once ${url}`)
   const response = UrlFetchApp.fetch(
     `${PAGE_SPEED_INSIGHTS_API_ROOT}?url=${url}&category=performance&strategy=mobile&key=${API_KEY}`,
     {}
@@ -192,20 +221,9 @@ const getPageSpeedResult = (url: string, lastPerformanceScore: string, isRetry =
     response.getContentText()
   ) as PageSpeedModel
 
-  const { categories } = pagespeedResult.lighthouseResult
-
-  const performanceScore = (categories.performance.score * 100).toFixed(0)
-
-  // performanceScoreとlastPerformanceScoreが10点差以上の場合は再実行する。再実行は1回まで
-  if (!isRetry && Math.abs(parseInt(performanceScore) - parseInt(lastPerformanceScore)) >= 10) {
-    // 2秒待つ
-    Utilities.sleep(2000)
-
-    return getPageSpeedResult(url, lastPerformanceScore, true)
-  }
-
   return pagespeedResult
 }
+
 
 function batch() {
   const spreadSheet = new SpreadSheet()
@@ -216,13 +234,7 @@ function batch() {
   urlList.forEach((v, index) => {
     const sheet = spreadSheet.sheetByName(v.name)
 
-    // 最後の行のPerformanceの値を取得
-    const lastRow = sheet.getLastRow()
-    const lastPerformance = sheet.getRange(lastRow, 2).getValue() as string
-
-    const pagespeedResult = getPageSpeedResult(v.url, lastPerformance)
-
-    const { categories, audits } = pagespeedResult.lighthouseResult
+    const isAutoReserveUrl = v.url.includes('autoreserve.com')
 
     const date = new Date()
       .toLocaleDateString('ja-JP', {
@@ -233,48 +245,157 @@ function batch() {
       .split('/')
       .join('/')
 
-    const values = {
-      date,
-      performance: (categories.performance.score * 100).toFixed(0),
-      fcpScore: (
-        audits['first-contentful-paint'].score *
-        categories.performance.auditRefs.filter(
-          (v) => v.id === 'first-contentful-paint'
-        )[0].weight
-      ).toFixed(1),
-      siScore: (
-        audits['speed-index'].score *
-        categories.performance.auditRefs.filter(
-          (v) => v.id === 'speed-index'
-        )[0].weight
-      ).toFixed(1),
-      lcpScore: (
-        audits['largest-contentful-paint'].score *
-        categories.performance.auditRefs.filter(
-          (v) => v.id === 'largest-contentful-paint'
-        )[0].weight
-      ).toFixed(1),
-      tbtScore: (
-        audits['total-blocking-time'].score *
-        categories.performance.auditRefs.filter(
-          (v) => v.id === 'total-blocking-time'
-        )[0].weight
-      ).toFixed(1),
-      clsScore: (
-        audits['cumulative-layout-shift'].score *
-        categories.performance.auditRefs.filter(
-          (v) => v.id === 'cumulative-layout-shift'
-        )[0].weight
-      ).toFixed(1),
-      fcpTime: audits['first-contentful-paint'].numericValue.toFixed(1),
-      siTime: audits['speed-index'].numericValue.toFixed(1),
-      lcpTime: audits['largest-contentful-paint'].numericValue.toFixed(1),
-      tbtTime: audits['total-blocking-time'].numericValue.toFixed(1),
-      clsValue: audits['cumulative-layout-shift'].numericValue.toFixed(1),
+    let values: TValue
+
+    // autoreserveの検証は3回の平均を取る
+    if (isAutoReserveUrl) {
+      const pagespeedResults = getPageSpeedResults3Times(v.url)
+
+      const vArray: TValue[] = []
+      pagespeedResults.forEach((result) => {
+        const { categories, audits } = result.lighthouseResult
+
+        vArray.push({
+          performance: (categories.performance.score * 100).toFixed(0),
+          fcpScore: (
+            audits['first-contentful-paint'].score *
+            categories.performance.auditRefs.filter(
+              (v) => v.id === 'first-contentful-paint'
+            )[0].weight
+          ).toFixed(1),
+          siScore: (
+            audits['speed-index'].score *
+            categories.performance.auditRefs.filter(
+              (v) => v.id === 'speed-index'
+            )[0].weight
+          ).toFixed(1),
+          lcpScore: (
+            audits['largest-contentful-paint'].score *
+            categories.performance.auditRefs.filter(
+              (v) => v.id === 'largest-contentful-paint'
+            )[0].weight
+          ).toFixed(1),
+          tbtScore: (
+            audits['total-blocking-time'].score *
+            categories.performance.auditRefs.filter(
+              (v) => v.id === 'total-blocking-time'
+            )[0].weight
+          ).toFixed(1),
+          clsScore: (
+            audits['cumulative-layout-shift'].score *
+            categories.performance.auditRefs.filter(
+              (v) => v.id === 'cumulative-layout-shift'
+            )[0].weight
+          ).toFixed(1),
+          fcpTime: audits['first-contentful-paint'].numericValue.toFixed(1),
+          siTime: audits['speed-index'].numericValue.toFixed(1),
+          lcpTime: audits['largest-contentful-paint'].numericValue.toFixed(1),
+          tbtTime: audits['total-blocking-time'].numericValue.toFixed(1),
+          clsValue: audits['cumulative-layout-shift'].numericValue.toFixed(1),
+        })
+      })
+
+      // vArrayのkeyそれぞれの平均値を計算。vArray.lengthで割る
+      values = {
+        performance: (
+          vArray.reduce((acc, cur) => acc + parseInt(cur.performance), 0) /
+          vArray.length
+        ).toFixed(0),
+        fcpScore: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.fcpScore), 0) /
+          vArray.length
+        ).toFixed(1),
+        siScore: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.siScore), 0) /
+          vArray.length
+        ).toFixed(1),
+        lcpScore: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.lcpScore), 0) /
+          vArray.length
+        ).toFixed(1),
+        tbtScore: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.tbtScore), 0) /
+          vArray.length
+        ).toFixed(1),
+        clsScore: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.clsScore), 0) /
+          vArray.length
+        ).toFixed(1),
+        fcpTime: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.fcpTime), 0) /
+          vArray.length
+        ).toFixed(1),
+        siTime: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.siTime), 0) /
+          vArray.length
+        ).toFixed(1),
+        lcpTime: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.lcpTime), 0) /
+          vArray.length
+        ).toFixed(1),
+        tbtTime: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.tbtTime), 0) /
+          vArray.length
+        ).toFixed(1),
+        clsValue: (
+          vArray.reduce((acc, cur) => acc + parseFloat(cur.clsValue), 0) /
+          vArray.length
+        ).toFixed(1),
+      }
+    } else {
+      const pagespeedResult = getPageSpeedResult(v.url)
+
+      const { categories, audits } = pagespeedResult.lighthouseResult
+
+      values = {
+        performance: (categories.performance.score * 100).toFixed(0),
+        fcpScore: (
+          audits['first-contentful-paint'].score *
+          categories.performance.auditRefs.filter(
+            (v) => v.id === 'first-contentful-paint'
+          )[0].weight
+        ).toFixed(1),
+        siScore: (
+          audits['speed-index'].score *
+          categories.performance.auditRefs.filter(
+            (v) => v.id === 'speed-index'
+          )[0].weight
+        ).toFixed(1),
+        lcpScore: (
+          audits['largest-contentful-paint'].score *
+          categories.performance.auditRefs.filter(
+            (v) => v.id === 'largest-contentful-paint'
+          )[0].weight
+        ).toFixed(1),
+        tbtScore: (
+          audits['total-blocking-time'].score *
+          categories.performance.auditRefs.filter(
+            (v) => v.id === 'total-blocking-time'
+          )[0].weight
+        ).toFixed(1),
+        clsScore: (
+          audits['cumulative-layout-shift'].score *
+          categories.performance.auditRefs.filter(
+            (v) => v.id === 'cumulative-layout-shift'
+          )[0].weight
+        ).toFixed(1),
+        fcpTime: audits['first-contentful-paint'].numericValue.toFixed(1),
+        siTime: audits['speed-index'].numericValue.toFixed(1),
+        lcpTime: audits['largest-contentful-paint'].numericValue.toFixed(1),
+        tbtTime: audits['total-blocking-time'].numericValue.toFixed(1),
+        clsValue: audits['cumulative-layout-shift'].numericValue.toFixed(1),
+      }
+
     }
 
+
     // valuesをシート最後の行に追加
-    sheet.appendRow(Object.values(values))
+    sheet.appendRow(
+      Object.values({
+        date,
+        ...values,
+      })
+    )
 
     Logger.log(`${v.name} score ${values.performance}`)
     Logger.log(`Done: ${index + 1} / ${urlList.length}`)
