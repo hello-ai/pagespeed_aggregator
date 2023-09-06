@@ -17,6 +17,9 @@ const INITIAL_COLUMN_NAMES = [
   'CLS value',
 ]
 
+const CORE_WEB_VITALS_API_ROOT = 'https://chromeuxreport.googleapis.com/v1/records:queryRecord'
+const CORE_WEB_VITALS_API_KEY = 'AIzaSyDHDzU5CBLZiiN51UA6d-OLnnl34RoaIN4'
+
 type Distribution = {
   min: number
   max: number
@@ -151,6 +154,30 @@ type TValue = {
   clsValue: string
 }
 
+type TMetrics = {
+  histogram: Array<{
+    start: number
+    end: number
+    density: number
+  }>
+  percentiles: {
+    p75: number
+  }
+}
+
+type TCoreWebVitals = {
+  record: {
+    metrics: {
+      first_contentful_paint: TMetrics
+      first_input_delay: TMetrics
+      interaction_to_next_paint: TMetrics
+      largest_contentful_paint: TMetrics
+      cumulative_layout_shift: TMetrics
+      experimental_time_to_first_byte: TMetrics
+    }
+  }
+}
+
 class SpreadSheet {
   private spreadsheet: GoogleAppsScript.Spreadsheet.Spreadsheet
 
@@ -222,6 +249,78 @@ const getPageSpeedResult = (url: string): PageSpeedModel => {
   ) as PageSpeedModel
 
   return pagespeedResult
+}
+
+const getCoreWebVitals = () => {
+  const origin = 'https://autoreserve.com'
+
+  Logger.log(`fetch ${origin} as core web vitals`)
+
+  const spreadSheet = new SpreadSheet()
+  const sheet = spreadSheet.sheetByName('Core Web Vitals')
+
+  const body = {
+    origin,
+    "formFactor": "PHONE"
+  }
+
+  const options = {
+    method: 'post' as any,
+    contentType: 'application/json',
+    payload: JSON.stringify(body)
+  }
+
+  // POST APIを実行
+  const response = UrlFetchApp.fetch(`${CORE_WEB_VITALS_API_ROOT}?key=${CORE_WEB_VITALS_API_KEY}`, options)
+  const corewebVitals = JSON.parse(response.getContentText()) as TCoreWebVitals
+
+  const { metrics } = corewebVitals.record
+
+  const date = new Date()
+    .toLocaleDateString('ja-JP', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+    .split('/')
+    .join('/')
+
+  Logger.log(metrics.first_contentful_paint)
+
+  const values = {
+    fcp: metrics.first_contentful_paint.percentiles.p75,
+    fid: metrics.first_input_delay.percentiles.p75,
+    inp: metrics.interaction_to_next_paint.percentiles.p75,
+    lcp: metrics.largest_contentful_paint.percentiles.p75,
+    cls: metrics.cumulative_layout_shift.percentiles.p75,
+    ttfb: metrics.experimental_time_to_first_byte.percentiles.p75,
+    fcpGreen: metrics.first_contentful_paint.histogram[0].density,
+    fcpYellow: metrics.first_contentful_paint.histogram[1].density,
+    fcpRed: metrics.first_contentful_paint.histogram[2].density,
+    fidGreen: metrics.first_input_delay.histogram[0].density,
+    fidYellow: metrics.first_input_delay.histogram[1].density,
+    fidRed: metrics.first_input_delay.histogram[2].density,
+    inpGreen: metrics.interaction_to_next_paint.histogram[0].density,
+    inpYellow: metrics.interaction_to_next_paint.histogram[1].density,
+    inpRed: metrics.interaction_to_next_paint.histogram[2].density,
+    lcpGreen: metrics.largest_contentful_paint.histogram[0].density,
+    lcpYellow: metrics.largest_contentful_paint.histogram[1].density,
+    lcpRed: metrics.largest_contentful_paint.histogram[2].density,
+    clsGreen: metrics.cumulative_layout_shift.histogram[0].density,
+    clsYellow: metrics.cumulative_layout_shift.histogram[1].density,
+    clsRed: metrics.cumulative_layout_shift.histogram[2].density,
+    ttfbGreen: metrics.experimental_time_to_first_byte.histogram[0].density,
+    ttfbYellow: metrics.experimental_time_to_first_byte.histogram[1].density,
+    ttfbRed: metrics.experimental_time_to_first_byte.histogram[2].density,
+  }
+
+  // valuesをシート最後の行に追加
+  sheet.appendRow(
+    Object.values({
+      date,
+      ...values,
+    })
+  )
 }
 
 
