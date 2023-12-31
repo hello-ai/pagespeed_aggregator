@@ -325,6 +325,8 @@ const getCoreWebVitals = () => {
 
 
 function batch() {
+  getCoreWebVitals()
+
   const spreadSheet = new SpreadSheet()
 
   // 検査対象のURL一覧を取得
